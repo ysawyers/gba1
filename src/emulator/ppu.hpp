@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 
 
 namespace emulator
@@ -17,7 +18,7 @@ namespace emulator
 
         PPU(Memory& p_memory) : m_memory(p_memory), m_frame() {}
 
-        const Frame_t& getFrame()
+        const Frame_t& getFrame() const noexcept
         {
             return m_frame;
         }

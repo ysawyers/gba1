@@ -16,7 +16,7 @@ namespace emulator
 
         void readFile(const std::filesystem::path& p_filepath);
 
-        const PPU::Frame_t& renderFrame();
+        const PPU::Frame_t& renderFrame() noexcept;
 
     private:
         Memory m_memory;
