@@ -38,6 +38,18 @@ namespace emulator
             m_romSize = p_size;
         }
 
+        template <typename t_width>
+        t_width read(std::uint32_t p_addr)
+        {
+            return 0;
+        }
+
+        template <typename t_width>
+        void write(std::uint32_t p_addr, t_width p_value)
+        {
+
+        }
+
     private:
         const std::uint8_t* m_rom;
 

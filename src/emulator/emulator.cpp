@@ -1,5 +1,6 @@
 #include "emulator.hpp"
 
+#include <cassert>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
@@ -51,6 +52,7 @@ namespace emulator
             );
 
             m_memory.setRom(rom, size);
+            m_cpu.reset();
 
             std::fclose(file);
         }
@@ -63,6 +65,11 @@ namespace emulator
 
     const PPU::Frame_t& Emulator::renderFrame() noexcept
     {
+        int cycles = m_cpu.tick();
+
+        // TODO: 1cpi will be enforced until components are flushed out
+        assert(cycles == 1);
+
         return m_ppu.getFrame();
     }
 }
