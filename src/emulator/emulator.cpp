@@ -67,6 +67,10 @@ namespace emulator
     {
         int cycles = m_cpu.tick();
 
+        m_cpu.tick();
+
+        m_cpu.tick();
+
         // TODO: 1cpi will be enforced until components are flushed out
         assert(cycles == 1);
 

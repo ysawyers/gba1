@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstdint>
 #include <print>
+#include <ranges>
 
 #include "memory.hpp"
 
@@ -43,6 +44,7 @@ namespace emulator
                     }
                     else
                     {
+                        std::println("instruction: address({:08x}) opcode({:08x})", m_regSet[15] - 8, instr);
                         return (this->*opcodeHandler)(instr);
                     }
                 }
@@ -93,8 +95,26 @@ namespace emulator
             return (m_regSet.m_cpsr >> 5) & 1;
         }
 
-        int bx(std::uint32_t p_instr) noexcept
+        // https://mgba-emu.github.io/gbatek/#branch-and-branch-with-link-b-bl-blx_imm
+        template <bool t_bl>
+        int branch(std::uint32_t p_instr) noexcept
         {
+            if constexpr (t_bl)
+            {
+                m_regSet[14] = m_regSet[15] - 4;
+            }
+            m_regSet[15] += (p_instr & 0xFFFFFF) * 4;
+
+            // PC update, flush pipeline
+            flushPipeline<std::uint32_t>();
+            return 1;
+        }
+
+        // https://mgba-emu.github.io/gbatek/#opcode-format-5
+        template <bool t_pre, bool t_up, bool t_psr, bool t_wb, bool t_load>
+        int blockDataTransfer(std::uint32_t p_instr) noexcept
+        {
+
             return 1;
         }
 
@@ -159,19 +179,60 @@ namespace emulator
         // === precompiled lookup tables === //
         //////////////////////////////////////
 
+        // TODO: investigate weird warning propogation on constexpr for range-based variable
+        #pragma GCC diagnostic push
+        #pragma GCC diagnostic ignored "-Wshadow"
+
         static constexpr auto m_armLUT = ([]()
         {
             std::array<int(CPU::*)(std::uint32_t), 4096> lut{};
+
+            /*
+                original instruction: 32 bits
+                31 30 29 28 27 26 25 24 23 22 21 20 19 18 17 16 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0
+
+                hash: 12 bits
+                27 26 25 24 23 22 21 20 7 6 5 4
+            */
+            template for (constexpr std::uint16_t hash : std::ranges::views::iota(0, 4096))
+            {
+                switch (hash >> 9)
+                {
+                    case 0b100:
+                    {
+                        lut[hash] = &CPU::blockDataTransfer<
+                            (hash >> 8) & 1,
+                            (hash >> 7) & 1,
+                            (hash >> 6) & 1,
+                            (hash >> 5) & 1,
+                            (hash >> 4) & 1
+                        >;
+                        break;
+                    }
+                    case 0b101:
+                    {
+                        lut[hash] = &CPU::branch<(hash >> 8) & 1>;
+                        break;
+                    }
+                }
+            }
 
             return lut;
         })();
 
         static constexpr auto m_thumbLUT = ([]()
         {
-            std::array<int(CPU::*)(std::uint32_t), 1024> lut{};
+            std::array<int(CPU::*)(std::uint32_t), 1024> lut;
+
+            template for (constexpr std::uint16_t hash : std::ranges::views::iota(0, 1024))
+            {
+                lut[hash] = nullptr;
+            }
 
             return lut;
         })();
+
+        #pragma GCC diagnostic pop
 
         static constexpr auto m_condLUT = ([]()
         {
@@ -194,9 +255,9 @@ namespace emulator
                 lut[0b0111][flags] = !v;
                 lut[0b1000][flags] = c & !z;
                 lut[0b1001][flags] = !c | z;
-                lut[0b1010][flags] = n & v;
+                lut[0b1010][flags] = n == v;
                 lut[0b1011][flags] = n ^ v;
-                lut[0b1100][flags] = !z && (n & v);
+                lut[0b1100][flags] = !z & (n == v);
                 lut[0b1101][flags] = z | (n ^ v);
                 lut[0b1110][flags] = true;
 
