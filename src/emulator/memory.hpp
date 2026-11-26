@@ -140,11 +140,40 @@ namespace emulator
 
             switch (region)
             {
-                default:
+                case 0x02:
                 {
-                    assert(false && "unknown write");
+                    *reinterpret_cast<t_width*>(m_ewram.data() + (offset & 0x0003FFFF)) = p_value;
+                    break;
+                }
+                case 0x03:
+                {
+                    *reinterpret_cast<t_width*>(m_iwram.data() + (offset & 0x00007FFF)) = p_value;
+                    break;
+                }
+                case 0x04:
+                {
+                    // TODO: implement correct mirroring
+                    *reinterpret_cast<t_width*>(m_ioRam.data() + (offset & 0x000003FF)) = p_value;
+                    break;
+                }
+                case 0x05:
+                {
+                    *reinterpret_cast<t_width*>(m_paletteRam.data() + (offset & 0x000003FF)) = p_value;
+                    break;
+                }
+                case 0x06:
+                {
+                    *reinterpret_cast<t_width*>(m_vram.data() + (offset & 0x00017FFF)) = p_value;
+                    break;
+                }
+                case 0x07:
+                {
+                    *reinterpret_cast<t_width*>(m_oam.data() + (offset & 0x000003FF)) = p_value;
+                    break;
                 }
             }
+
+            // invalid writes are ignored
         }
 
     private:

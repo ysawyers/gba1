@@ -18,5 +18,5 @@ target_compile_options(${PROJECT_NAME} PRIVATE
     -Wreorder
     -Wshadow
     -Wconversion
-    # -Werror
+    -Werror
 )

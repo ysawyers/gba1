@@ -11,6 +11,8 @@
 namespace
 {
     constexpr std::uint64_t s_maximumRomSize = 32ULL * 1024 * 1024 * 1024;
+
+    constexpr int s_cyclesPerFrame = 280896;
 }
 
 namespace emulator
@@ -65,15 +67,16 @@ namespace emulator
 
     const PPU::Frame_t& Emulator::renderFrame() noexcept
     {
-        int cycles = m_cpu.tick();
+        int totalCycles = 0;
+        while (totalCycles < s_cyclesPerFrame)
+        {
+            int cycles = m_cpu.tick();
 
-        m_cpu.tick();
+            // TODO: 1cpi will be enforced until components are flushed out
+            assert(cycles == 1);
 
-        m_cpu.tick();
-
-        // TODO: 1cpi will be enforced until components are flushed out
-        assert(cycles == 1);
-
+            totalCycles += cycles;
+        }
         return m_ppu.getFrame();
     }
 }

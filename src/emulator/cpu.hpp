@@ -40,7 +40,7 @@ namespace emulator
                     if (opcodeHandler == nullptr)
                     {
                         std::println("unhandled instruction: address({:08x}) opcode({:08x})", m_regSet[15] - 8, instr);
-                        assert(false);
+                        assert(false && "new instruction!");
                     }
                     else
                     {
@@ -114,13 +114,161 @@ namespace emulator
         template <bool t_pre, bool t_up, bool t_psr, bool t_wb, bool t_load>
         int blockDataTransfer(std::uint32_t p_instr) noexcept
         {
+            int rn = (p_instr >> 16) & 0xF;
+            auto transferList = static_cast<std::uint16_t>(p_instr);
 
+            assert(rn != 15 && "r15 should not be used as the base register in any LDM or STM instruction");
+
+            /*
+                when r15 is present in the transfer list the value is PC+12 so PC increment
+                has already occured before the execute stage is complete
+            */
+            m_regSet[15] += 4;
+
+            int numTransfers = std::popcount(transferList);
+            if (numTransfers == 0)
+            {
+                assert(false && "empty transfer list edge case");
+            }
+
+            std::uint32_t writebackAddr;
+            std::uint32_t baseAddr;
+
+            if constexpr (t_up)
+            {
+                writebackAddr = m_regSet[rn] + numTransfers * 4;
+                baseAddr = m_regSet[rn];
+            }
+            else
+            {
+                writebackAddr = m_regSet[rn] - numTransfers * 4;
+                /*
+                    the highest register in the transfer list is ALWAYS written last so when
+                    decrementing transfers start from the modified value of the base register
+                    and increment up
+                */
+                baseAddr = writebackAddr;
+            }
+
+            int reg = std::countr_zero(transferList);
+            bool pcTransfer = transferList >> 15;
+
+            if constexpr (t_load)
+            {
+                // LDM (load from memory)
+
+                if constexpr (t_wb)
+                {
+                    /*
+                        LDM will always overwrite the updated base register if it's in the transfer
+                        list so the base register is updated before the load is initiated
+                    */
+                    m_regSet[rn] = writebackAddr;
+                }
+
+                do
+                {
+                    if constexpr (t_pre)
+                    {
+                        baseAddr += 4;
+                        m_regSet[reg] = m_memory.read<std::uint32_t>(baseAddr);
+                    }
+                    else
+                    {
+                        m_regSet[reg] = m_memory.read<std::uint32_t>(baseAddr);
+                        baseAddr += 4;
+                    }
+                    transferList &= transferList - 1;
+                    reg = std::countr_zero(transferList);
+                }
+                while (reg != std::numeric_limits<decltype(transferList)>::digits);
+
+                if constexpr (t_psr)
+                {
+                    if (pcTransfer)
+                    {
+                        assert((m_regSet.spsr() & 0x1F) == 0 && "LDM invalid mode change");
+                        m_regSet.m_cpsr = m_regSet.spsr();
+                    }
+                }
+            }
+            else
+            {
+                // STM (store to memory)
+
+                if constexpr (t_psr)
+                {
+                    if (pcTransfer)
+                    {
+                        assert(!t_wb && "base writeback should not be used with STM and r15 in the transferList (S=1)");
+
+                        assert(false && "TODO: STM user bank transfer");
+                    }
+                }
+
+                if constexpr (t_wb)
+                {
+                    /*
+                        if the first register transferred is the same as the base register the unmodified
+                        value will be written to memory -- all subsequent writes will write the modified
+                        value
+                    */
+                    if (reg == rn)
+                    {
+                        if constexpr (t_pre)
+                        {
+                            baseAddr += 4;
+                            m_memory.write<std::uint32_t>(baseAddr, m_regSet[rn]);
+                        }
+                        else
+                        {
+                            m_memory.write<std::uint32_t>(baseAddr, m_regSet[rn]);
+                            baseAddr += 4;
+                        }
+                        transferList &= transferList - 1;
+                        reg = std::countr_zero(transferList);
+                    }
+                    m_regSet[rn] = writebackAddr;
+                }
+
+                while (reg != std::numeric_limits<decltype(transferList)>::digits)
+                {
+                    if constexpr (t_pre)
+                    {
+                        baseAddr += 4;
+                        m_memory.write<std::uint32_t>(baseAddr, m_regSet[reg]);
+                    }
+                    else
+                    {
+                        m_memory.write<std::uint32_t>(baseAddr, m_regSet[reg]);
+                        baseAddr += 4;
+                    }
+                    transferList &= transferList - 1;
+                    reg = std::countr_zero(transferList);
+                }
+            }
+
+            if (pcTransfer)
+            {
+                if constexpr (t_load)
+                {
+                    flushPipeline<std::uint32_t>();
+                }
+                else if constexpr (t_psr)
+                {
+                    assert(false && "TODO: reset from user bank transfer mode");
+                }
+            }
+            else
+            {
+                m_regSet[15] += 4;
+            }
             return 1;
         }
 
     private:
         // https://gbadev.net/gbadoc/cpu.html#processor-modes
-        enum Mode
+        enum class Bank
         {
             USR, // SYS
             FIQ,
@@ -133,22 +281,28 @@ namespace emulator
         class RegisterSet
         {
         public:
-            RegisterSet() : m_cpsr(0x0000001F), m_banks(), m_bankIndex(USR)
+            RegisterSet() : m_cpsr(0x0000001F), m_banks(), m_bank(Bank::USR)
             {
                 // r0-r12 and LR is indeterminate
 
                 // initialize SP
-                m_banks[USR].m_regs[13] = 0x03007F00;
-                m_banks[IRQ].m_regs[13] = 0x03007FA0;
-                m_banks[SVC].m_regs[13] = 0x03007FE0;
+                m_banks[std::to_underlying(Bank::USR)].m_regs[13] = 0x03007F00;
+                m_banks[std::to_underlying(Bank::IRQ)].m_regs[13] = 0x03007FA0;
+                m_banks[std::to_underlying(Bank::SVC)].m_regs[13] = 0x03007FE0;
 
                 // initialize PC
-                m_banks[USR].m_regs[15] = 0x08000000;
+                m_banks[std::to_underlying(Bank::USR)].m_regs[15] = 0x08000000;
             }
 
-            std::uint32_t& operator[](std::uint8_t p_reg) noexcept
+            std::uint32_t& spsr() noexcept
             {
-                return m_banks[m_bankIndex].m_regs[p_reg];
+                return m_banks[std::to_underlying(m_bank)].m_spsr;
+            }
+
+            std::uint32_t& operator[](int p_reg) noexcept
+            {
+                assert(p_reg >= 0 && p_reg < 16 && "register index out of bounds");
+                return m_banks[std::to_underlying(m_bank)].m_regs[p_reg];
             }
 
         public:
@@ -160,13 +314,21 @@ namespace emulator
             {
                 std::array<std::uint32_t, 16> m_regs{};
                 std::uint32_t m_spsr{};
+
+                void logDump()
+                {
+                    // std::println(
+                    //     "r0: {:08x} r1: {:08x} r2: {:08x}\n",
+
+                    // );
+                }
             };
 
             // https://mgba-emu.github.io/gbatek/#overview-11
             std::array<RegisterFile, 6> m_banks;
 
             // index associated with the current mode in cpsr used to access the proper bank
-            Mode m_bankIndex;
+            Bank m_bank;
         };
 
         Memory& m_memory;
