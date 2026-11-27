@@ -79,4 +79,10 @@ namespace emulator
         }
         return m_ppu.getFrame();
     }
+
+    const PPU::Frame_t& Emulator::singleStep() noexcept
+    {
+        m_cpu.tick();
+        return m_ppu.getFrame();
+    }
 }

@@ -18,6 +18,8 @@ namespace emulator
 
         const PPU::Frame_t& renderFrame() noexcept;
 
+        const PPU::Frame_t& singleStep() noexcept;
+
     private:
         Memory m_memory;
         CPU m_cpu;

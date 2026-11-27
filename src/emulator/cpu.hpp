@@ -34,19 +34,19 @@ namespace emulator
 
                 if (m_condLUT[cond][flags])
                 {
-                    std::uint32_t hash = ((instr >> 16) & 0xFF0) | ((instr >> 4) & 0x00F);
+                    std::uint16_t hash = ((instr >> 16) & 0xFF0) | ((instr >> 4) & 0x00F);
 
-                    auto opcodeHandler = m_armLUT[hash];
-                    if (opcodeHandler == nullptr)
+                    auto instrHandler = m_armLUT[hash];
+                    if (instrHandler == nullptr) [[unlikely]]
                     {
+                        // undefined instruction, abort immediately
                         std::println("unhandled instruction: address({:08x}) opcode({:08x})", m_regSet[15] - 8, instr);
                         assert(false && "new instruction!");
+                        return -1;
                     }
-                    else
-                    {
-                        std::println("instruction: address({:08x}) opcode({:08x})", m_regSet[15] - 8, instr);
-                        return (this->*opcodeHandler)(instr);
-                    }
+
+                    // go go go!
+                    return (this->*instrHandler)(instr);
                 }
                 else
                 {
@@ -64,6 +64,60 @@ namespace emulator
         }
 
     private:
+        enum class ShiftType
+        {
+            LSL,
+            LSR,
+            ASR,
+            ROR
+        };
+
+        std::uint32_t ror(std::uint32_t p_operand, std::uint32_t p_shiftAmount) const noexcept
+        {
+            return (p_operand >> (p_shiftAmount & 31)) | (p_operand << ((-p_shiftAmount) & 31));
+        }
+
+        template <ShiftType t_shiftType, bool t_regImmShift>
+        bool barrelShifter(std::uint32_t& p_operand, std::uint32_t p_shiftAmount) const noexcept
+        {
+            switch (t_shiftType)
+            {
+                case ShiftType::LSL: // logical shift left
+                {
+                    assert(false && "TODO: LSL");
+                    break;
+                }
+                case ShiftType::LSR: // logical shift right
+                {
+                    assert(false && "TODO: LSR");
+                    break;
+                }
+                case ShiftType::ASR: // arithmetic shift right
+                {
+                    assert(false && "TODO: ASR");
+                    break;
+                }
+                case ShiftType::ROR: // rotate right
+                {
+                    if constexpr (t_regImmShift)
+                    {
+                        if (p_shiftAmount == 0)
+                        {
+                            // rotate right extended (RRX)
+                            bool carryOut = p_operand & 1;
+                            p_operand = (static_cast<std::uint32_t>(flagC()) << 31) | (p_operand >> 1);
+                            return carryOut;
+                        }
+                    }
+                    else
+                    {
+                        p_operand = ror(p_operand, p_shiftAmount);
+                        return p_operand >> 31;
+                    }
+                }
+            }
+        }
+
         template <typename t_width>
         t_width fetch() noexcept
         {
@@ -95,10 +149,17 @@ namespace emulator
             return (m_regSet.m_cpsr >> 5) & 1;
         }
 
+        bool flagC() const noexcept
+        {
+            return (m_regSet.m_cpsr >> 29) & 1;
+        }
+
         // https://mgba-emu.github.io/gbatek/#branch-and-branch-with-link-b-bl-blx_imm
         template <bool t_bl>
         int branch(std::uint32_t p_instr) noexcept
         {
+            assert(((p_instr >> 25) & 7) == 0b101 && "decoder bug");
+
             if constexpr (t_bl)
             {
                 m_regSet[14] = m_regSet[15] - 4;
@@ -114,6 +175,8 @@ namespace emulator
         template <bool t_pre, bool t_up, bool t_psr, bool t_wb, bool t_load>
         int blockDataTransfer(std::uint32_t p_instr) noexcept
         {
+            assert(((p_instr >> 25) & 7) == 0b100 && "decoder bug");
+
             int rn = (p_instr >> 16) & 0xF;
             auto transferList = static_cast<std::uint16_t>(p_instr);
 
@@ -266,43 +329,179 @@ namespace emulator
             return 1;
         }
 
-    private:
-        // https://gbadev.net/gbadoc/cpu.html#processor-modes
-        enum class Bank
+        // https://mgba-emu.github.io/gbatek/#opcode-format
+        template <bool t_imm, int t_opcode, bool t_S, ShiftType t_shiftType, bool t_regShift>
+        int dataProcessing(std::uint32_t p_instr) noexcept
         {
-            USR, // SYS
-            FIQ,
-            SVC,
-            ABT,
-            IRQ,
-            UND
-        };
+            assert(((p_instr >> 26) & 3) == 0 && "decoder bug");
 
+            int rn = (p_instr >> 16) & 0xF;
+            int rd = (p_instr >> 12) & 0xF;
+
+            std::uint32_t op2;
+            bool carryOut;
+
+            if constexpr (t_imm)
+            {
+                op2 = p_instr & 0xFF;
+                carryOut = barrelShifter<ShiftType::ROR, false>(op2, ((p_instr >> 8) & 0xF) * 2);
+            }
+            else
+            {
+                assert(false && "handle non immediate ALU");
+            }
+
+            // TODO: flags are not set if rd == 15
+            // TODO: If a register is used to specify the shift amount the PC will be 12 bytes ahead.
+
+            switch (t_opcode)
+            {
+                case 0x0:
+                {
+                    assert(false && "TODO: AND");
+                    break;
+                }
+                case 0x1:
+                {
+                    assert(false && "TODO: EOR");
+                    break;
+                }
+                case 0x2:
+                {
+                    assert(false && "TODO: SUB");
+                    break;
+                }
+                case 0x3:
+                {
+                    assert(false && "TODO: RSB");
+                    break;
+                }
+                case 0x4:
+                {
+                    assert(false && "TODO: ADD");
+                    break;
+                }
+                case 0x5:
+                {
+                    assert(false && "TODO: ADC");
+                    break;
+                }
+                case 0x6:
+                {
+                    assert(false && "TODO: SBC");
+                    break;
+                }
+                case 0x7:
+                {
+                    assert(false && "TODO: RSC");
+                    break;
+                }
+                case 0x8:
+                {
+                    static_assert(t_opcode != 0x8 || (t_S && "decoder bug"));
+                    assert(rd == 0 && "decoder bug");
+
+                    assert(false && "TODO: TST");
+                    break;
+                }
+                case 0x9:
+                {
+                    static_assert(t_opcode != 0x9 || (t_S && "decoder bug"));
+                    assert(rd == 0 && "decoder bug");
+
+                    assert(false && "TODO: TEQ");
+                    break;
+                }
+                case 0xA:
+                {
+                    static_assert(t_opcode != 0xA || (t_S && "decoder bug"));
+                    assert(rd == 0 && "decoder bug");
+
+                    assert(false && "TODO: CMP");
+                    break;
+                }
+                case 0xB:
+                {
+                    static_assert(t_opcode != 0xB || (t_S && "decoder bug"));
+                    assert(rd == 0 && "decoder bug");
+
+                    assert(false && "TODO: CMN");
+                    break;
+                }
+                case 0xC:
+                {
+                    assert(false && "TODO: ORR");
+                    break;
+                }
+                case 0xD: // MOV (move) ; Rd = Op2
+                {
+                    assert(rn == 0 && "decoder bug");
+                    m_regSet[rd] = op2;
+                    break;
+                }
+                case 0xE:
+                {
+                    assert(false && "TODO: BIC");
+                    break;
+                }
+                case 0xF:
+                {
+                    assert(rn == 0 && "decoder bug");
+
+                    assert(false && "TODO: MVN");
+                    break;
+                }
+            }
+
+            if (rd == 15)
+            {
+                if constexpr (t_S)
+                {
+                    assert((m_regSet.m_cpsr & 0x1F) != 0x10 && "data processing PSR transfer should NOT be used in User mode");
+                    assert(false && "TODO");
+                }
+                flushPipeline<std::uint32_t>();
+            }
+            else
+            {
+                m_regSet[15] += 4;
+            }
+            return 1;
+        }
+
+        template <bool t_imm, bool t_psr, bool t_opcode>
+        int psrTransfer(std::uint32_t p_instr)
+        {
+            std::println("unhandled instr psr: {:08x}", p_instr);
+            assert(false && "PSR TRANSFER!");
+            return 1;
+        }
+
+    private:
         class RegisterSet
         {
         public:
-            RegisterSet() : m_cpsr(0x0000001F), m_banks(), m_bank(Bank::USR)
+            RegisterSet() : m_cpsr(0x0000001F), m_banks(), m_bank(USR)
             {
                 // r0-r12 and LR is indeterminate
 
                 // initialize SP
-                m_banks[std::to_underlying(Bank::USR)].m_regs[13] = 0x03007F00;
-                m_banks[std::to_underlying(Bank::IRQ)].m_regs[13] = 0x03007FA0;
-                m_banks[std::to_underlying(Bank::SVC)].m_regs[13] = 0x03007FE0;
+                m_banks[USR].m_regs[13] = 0x03007F00;
+                m_banks[IRQ].m_regs[13] = 0x03007FA0;
+                m_banks[SVC].m_regs[13] = 0x03007FE0;
 
                 // initialize PC
-                m_banks[std::to_underlying(Bank::USR)].m_regs[15] = 0x08000000;
+                m_banks[USR].m_regs[15] = 0x08000000;
             }
 
             std::uint32_t& spsr() noexcept
             {
-                return m_banks[std::to_underlying(m_bank)].m_spsr;
+                return m_banks[m_bank].m_spsr;
             }
 
             std::uint32_t& operator[](int p_reg) noexcept
             {
-                assert(p_reg >= 0 && p_reg < 16 && "register index out of bounds");
-                return m_banks[std::to_underlying(m_bank)].m_regs[p_reg];
+                return m_banks[m_bank].m_regs[p_reg];
             }
 
         public:
@@ -310,18 +509,21 @@ namespace emulator
             std::uint32_t m_cpsr;
 
         private:
+            // https://gbadev.net/gbadoc/cpu.html#processor-modes
+            enum Bank
+            {
+                USR, // SYS
+                FIQ,
+                SVC,
+                ABT,
+                IRQ,
+                UND
+            };
+
             struct RegisterFile
             {
                 std::array<std::uint32_t, 16> m_regs{};
                 std::uint32_t m_spsr{};
-
-                void logDump()
-                {
-                    // std::println(
-                    //     "r0: {:08x} r1: {:08x} r2: {:08x}\n",
-
-                    // );
-                }
             };
 
             // https://mgba-emu.github.io/gbatek/#overview-11
@@ -360,6 +562,76 @@ namespace emulator
             {
                 switch (hash >> 9)
                 {
+                    case 0b000:
+                    {
+                        if constexpr (((hash >> 7) & 3) == 0b10)
+                        {
+                            if constexpr (((hash >> 4) & 3) == 0b00)
+                            {
+                                if constexpr ((hash & 0xF) == 0b0000)
+                                {
+                                    lut[hash] = &CPU::psrTransfer<
+                                        (hash >> 9) & 1,
+                                        (hash >> 6) & 1,
+                                        (hash >> 5) & 1
+                                    >;
+                                }
+                                else if constexpr ((hash & 0xF) == 0b1001)
+                                {
+                                    // TODO: SWP
+                                }
+                            }
+                            else if constexpr (((hash >> 4) & 3) == 0b10 && (hash & 0xF) == 0b0000)
+                            {
+                                lut[hash] = &CPU::psrTransfer<
+                                    (hash >> 9) & 1,
+                                    (hash >> 6) & 1,
+                                    (hash >> 5) & 1
+                                >;
+                            }
+                        }
+                        break;
+                    }
+                    case 0b001:
+                    {
+                        if constexpr (((hash >> 7) & 3) == 0b10)
+                        {
+                            if constexpr (((hash >> 4) & 3) == 0b10)
+                            {
+                                lut[hash] = &CPU::psrTransfer<
+                                    (hash >> 9) & 1,
+                                    (hash >> 6) & 1,
+                                    (hash >> 5) & 1
+                                >;
+                            }
+                            else if constexpr (((hash >> 4) & 3) == 0b00)
+                            {
+                                // undefined instruction
+                                lut[hash] = nullptr;
+                            }
+                            else
+                            {
+                                lut[hash] = &CPU::dataProcessing<
+                                    (hash >> 9) & 1,
+                                    (hash >> 5) & 0xF,
+                                    (hash >> 4) & 1,
+                                    static_cast<ShiftType>((hash >> 1) & 0x3),
+                                    hash & 1
+                                >;
+                            }
+                        }
+                        else
+                        {
+                            lut[hash] = &CPU::dataProcessing<
+                                (hash >> 9) & 1,
+                                (hash >> 5) & 0xF,
+                                (hash >> 4) & 1,
+                                static_cast<ShiftType>((hash >> 1) & 0x3),
+                                hash & 1
+                            >;
+                        }
+                        break;
+                    }
                     case 0b100:
                     {
                         lut[hash] = &CPU::blockDataTransfer<
