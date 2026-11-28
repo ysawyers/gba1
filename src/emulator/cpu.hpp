@@ -315,6 +315,7 @@ namespace emulator
             {
                 if constexpr (t_load)
                 {
+                    // PC update, flush pipeline
                     flushPipeline<std::uint32_t>();
                 }
                 else if constexpr (t_psr)
@@ -460,6 +461,7 @@ namespace emulator
                     assert((m_regSet.m_cpsr & 0x1F) != 0x10 && "data processing PSR transfer should NOT be used in User mode");
                     assert(false && "TODO");
                 }
+                // PC update, flush pipeline
                 flushPipeline<std::uint32_t>();
             }
             else
@@ -469,11 +471,64 @@ namespace emulator
             return 1;
         }
 
+        // https://mgba-emu.github.io/gbatek/#opcode-format-2
         template <bool t_imm, bool t_psr, bool t_opcode>
-        int psrTransfer(std::uint32_t p_instr)
+        int psrTransfer(std::uint32_t p_instr) noexcept
         {
-            std::println("unhandled instr psr: {:08x}", p_instr);
-            assert(false && "PSR TRANSFER!");
+            assert(((p_instr >> 26) & 3) == 0 && "decoder bug");
+            assert(((p_instr >> 23) & 3) == 0b10 && "decoder bug");
+            assert(((p_instr >> 20) & 1) == 0 && "decoder bug");
+
+            if constexpr (t_opcode)
+            {
+                // Move to Status Register (MSR)
+
+                assert(((p_instr >> 12) & 0xF) == 0b1111);
+
+                bool writeFlags = (p_instr >> 19) & 1;
+                bool writeControl = (p_instr >> 16) & 1;
+                std::uint32_t operand;
+
+                if constexpr (t_imm)
+                {
+                    operand = ror(p_instr & 0xFF, ((p_instr >> 8) & 0xF) * 2);
+                }
+                else
+                {
+                    assert(((p_instr >> 4) & 0xFF) == 0 && "decoder bug");
+
+                    int rm = p_instr & 0xF;
+                    assert(rm != 15 && "r15 must NOT be specified as a source register");
+                    operand = m_regSet[rm];
+                }
+
+                std::uint32_t& psr = t_psr ? m_regSet.spsr() : m_regSet.m_cpsr;
+
+                if (writeFlags)
+                {
+                    psr &= ~0xF0000000;
+                    psr |= operand & 0xF0000000;
+                }
+
+                if (writeControl && (m_regSet.m_cpsr & 0x1F) != 0x10)
+                {
+                    // control bits can only be changed in non User mode and T bit must be preserved
+                    psr &= ~0x000000DF;
+                    psr |= operand & 0x000000DF;
+                }
+            }
+            else
+            {
+                // ... (MRS)
+
+                static_assert(t_imm == 0 && "decoder bug");
+                assert((p_instr & 0xFFF) == 0 && "decoder bug");
+                assert(((p_instr >> 16) & 0xF) == 0b1111 && "decoder bug");
+
+                assert(false && "TODO: MRS");
+            }
+
+            m_regSet[15] += 4;
             return 1;
         }
 
@@ -496,6 +551,11 @@ namespace emulator
 
             std::uint32_t& spsr() noexcept
             {
+                if ((m_cpsr & 0x1F) == 0x1F || (m_cpsr & 0x1F) == 0x10)
+                {
+                    // in User and System mode no SPSR exists
+                    return m_cpsr;
+                }
                 return m_banks[m_bank].m_spsr;
             }
 
@@ -560,65 +620,53 @@ namespace emulator
             */
             template for (constexpr std::uint16_t hash : std::ranges::views::iota(0, 4096))
             {
-                switch (hash >> 9)
+                // constexpr switch in C++29 ;-;
+
+                if constexpr ((hash >> 9) == 0b000)
                 {
-                    case 0b000:
+                    if constexpr (((hash >> 7) & 3) == 0b10)
                     {
-                        if constexpr (((hash >> 7) & 3) == 0b10)
+                        if constexpr (((hash >> 4) & 3) == 0b00)
                         {
-                            if constexpr (((hash >> 4) & 3) == 0b00)
-                            {
-                                if constexpr ((hash & 0xF) == 0b0000)
-                                {
-                                    lut[hash] = &CPU::psrTransfer<
-                                        (hash >> 9) & 1,
-                                        (hash >> 6) & 1,
-                                        (hash >> 5) & 1
-                                    >;
-                                }
-                                else if constexpr ((hash & 0xF) == 0b1001)
-                                {
-                                    // TODO: SWP
-                                }
-                            }
-                            else if constexpr (((hash >> 4) & 3) == 0b10 && (hash & 0xF) == 0b0000)
+                            if constexpr ((hash & 0xF) == 0b0000)
                             {
                                 lut[hash] = &CPU::psrTransfer<
                                     (hash >> 9) & 1,
                                     (hash >> 6) & 1,
                                     (hash >> 5) & 1
                                 >;
+                            }
+                            else if constexpr ((hash & 0xF) == 0b1001)
+                            {
+                                // TODO: SWP
                             }
                         }
-                        break;
-                    }
-                    case 0b001:
-                    {
-                        if constexpr (((hash >> 7) & 3) == 0b10)
+                        else if constexpr (((hash >> 4) & 3) == 0b10 && (hash & 0xF) == 0b0000)
                         {
-                            if constexpr (((hash >> 4) & 3) == 0b10)
-                            {
-                                lut[hash] = &CPU::psrTransfer<
-                                    (hash >> 9) & 1,
-                                    (hash >> 6) & 1,
-                                    (hash >> 5) & 1
-                                >;
-                            }
-                            else if constexpr (((hash >> 4) & 3) == 0b00)
-                            {
-                                // undefined instruction
-                                lut[hash] = nullptr;
-                            }
-                            else
-                            {
-                                lut[hash] = &CPU::dataProcessing<
-                                    (hash >> 9) & 1,
-                                    (hash >> 5) & 0xF,
-                                    (hash >> 4) & 1,
-                                    static_cast<ShiftType>((hash >> 1) & 0x3),
-                                    hash & 1
-                                >;
-                            }
+                            lut[hash] = &CPU::psrTransfer<
+                                (hash >> 9) & 1,
+                                (hash >> 6) & 1,
+                                (hash >> 5) & 1
+                            >;
+                        }
+                    }
+                }
+                else if constexpr ((hash >> 9) == 0b001)
+                {
+                    if constexpr (((hash >> 7) & 3) == 0b10)
+                    {
+                        if constexpr (((hash >> 4) & 3) == 0b10)
+                        {
+                            lut[hash] = &CPU::psrTransfer<
+                                (hash >> 9) & 1,
+                                (hash >> 6) & 1,
+                                (hash >> 5) & 1
+                            >;
+                        }
+                        else if constexpr (((hash >> 4) & 3) == 0b00)
+                        {
+                            // undefined instruction
+                            lut[hash] = nullptr;
                         }
                         else
                         {
@@ -630,24 +678,31 @@ namespace emulator
                                 hash & 1
                             >;
                         }
-                        break;
                     }
-                    case 0b100:
+                    else
                     {
-                        lut[hash] = &CPU::blockDataTransfer<
-                            (hash >> 8) & 1,
-                            (hash >> 7) & 1,
-                            (hash >> 6) & 1,
-                            (hash >> 5) & 1,
-                            (hash >> 4) & 1
+                        lut[hash] = &CPU::dataProcessing<
+                            (hash >> 9) & 1,
+                            (hash >> 5) & 0xF,
+                            (hash >> 4) & 1,
+                            static_cast<ShiftType>((hash >> 1) & 0x3),
+                            hash & 1
                         >;
-                        break;
                     }
-                    case 0b101:
-                    {
-                        lut[hash] = &CPU::branch<(hash >> 8) & 1>;
-                        break;
-                    }
+                }
+                else if constexpr ((hash >> 9) == 0b100)
+                {
+                    lut[hash] = &CPU::blockDataTransfer<
+                        (hash >> 8) & 1,
+                        (hash >> 7) & 1,
+                        (hash >> 6) & 1,
+                        (hash >> 5) & 1,
+                        (hash >> 4) & 1
+                    >;
+                }
+                else if constexpr ((hash >> 9) == 0b101)
+                {
+                    lut[hash] = &CPU::branch<(hash >> 8) & 1>;
                 }
             }
 
